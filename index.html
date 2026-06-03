@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ТАНКИ — мобильная версия</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: radial-gradient(circle at 20% 30%, #1a2a1f, #0a0f0a);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', monospace;
+            touch-action: pan-x pan-y; /* разрешаем скролл только вне кнопок */
+        }
+        .game-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 12px 8px;
+        }
+        canvas {
+            display: block;
+            box-shadow: 0 0 0 3px #7a6233, 0 12px 28px black;
+            border-radius: 16px;
+            cursor: pointer;
+            width: 100%;
+            height: auto;
+            max-width: 800px;
+            touch-action: none;
+        }
+        /* мобильная панель управления */
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 15px;
+            align-items: center;
+            background: #1e1b14cc;
+            backdrop-filter: blur(8px);
+            padding: 12px 18px;
+            border-radius: 60px;
+            border: 1px solid #c9aa6a;
+        }
+        .dpad {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .dpad-row {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+        .ctrl-btn {
+            background: #2c241a;
+            border: none;
+            color: #f5d742;
+            font-size: 32px;
+            font-weight: bold;
+            width: 70px;
+            height: 70px;
+            border-radius: 50px;
+            box-shadow: 0 5px 0 #5a3a1a;
+            transition: 0.05s linear;
+            touch-action: manipulation;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ctrl-btn:active {
+            transform: translateY(3px);
+            box-shadow: 0 2px 0 #5a3a1a;
+        }
+        .fire-btn {
+            background: #8b2a1a;
+            box-shadow: 0 5px 0 #4a150a;
+            color: #ffcc88;
+            font-size: 28px;
+            width: 90px;
+            letter-spacing: 2px;
+        }
+        .restart-mobile {
+            background: #2f4f3a;
+            width: 70px;
+            font-size: 28px;
+        }
+        .info-panel {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            max-width: 800px;
+            margin-bottom: 12px;
+            background: #1e1b14cc;
+            backdrop-filter: blur(8px);
+            padding: 8px 20px;
+            border-radius: 40px;
+            color: #f7ecc7;
+            font-weight: bold;
+            font-size: 1.4rem;
+            box-sizing: border-box;
+        }
+        @media (max-width: 700px) {
+            .ctrl-btn { width: 55px; height: 55px; font-size: 26px; }
+            .fire-btn { width: 75px; }
+            .info-panel { font-size: 1.1rem; padding: 5px 16px; }
+        }
+        @media (max-width: 550px) {
+            .ctrl-btn { width: 48px; height: 48px; font-size: 22px; }
+            .fire-btn { width: 65px; font-size: 22px; }
+            .controls { gap: 8px; padding: 10px 12px; }
+        }
+        @media (max-width: 450px) {
+            .ctrl-btn { width: 44px; height: 44px; font-size: 20px; }
+            .fire-btn { width: 58px; }
+        }
+    </style>
+</head>
+<body>
+<div class="game-wrapper">
+    <div class="info-panel">
+        <span>❤️ <span id="healthValue">3</span></span>
+        <span>⭐ <span id="scoreValue">0</span></span>
+        <span>🎮 TANKS</span>
+    </div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div class="controls">
+        <div class="dpad">
+            <div class="dpad-row">
+                <button class="ctrl-btn" id="btnUp">▲</button>
+            </div>
+            <div class="dpad-row">
+                <button class="ctrl-btn" id="btnLeft">◀</button>
+                <button class="ctrl-btn" id="btnDown">▼</button>
+                <button class="ctrl-btn" id="btnRight">▶</button>
+            </div>
+        </div>
+        <button class="ctrl-btn fire-btn" id="btnFire">💥</button>
+        <button class="ctrl-btn restart-mobile" id="btnRestart">🔄</button>
+    </div>
+    <div style="font-size: 12px; color: #c9aa6a; margin-top: 12px; text-align: center;">
+        ←  →  ↑  ↓  |  🔥 стрельба  |  🔄 рестарт
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ========== CANVAS ==========
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // ========== ПЕРЕМЕННЫЕ ИГРЫ ==========
+        let gameOver = false;
+        let health = 3;
+        let score = 0;
+        
+        // ========== ТАНК ИГРОКА ==========
+        let tank = {
+            x: 380, y: 520,
+            w: 40, h: 40,
+            dir: 0
+        };
+        
+        // ========== ПУЛЯ ИГРОКА ==========
+        let bullet = {
+            active: false,
+            x: 0, y: 0,
+            speedX: 0, speedY: 0
+        };
+        let shootDelay = 0;
+        
+        // ========== ПУЛИ ВРАГОВ ==========
+        let enemyBullets = [];
+        
+        // ========== ВРАГИ ==========
+        let enemies = [];
+        
+        // ========== КИРПИЧИ ==========
+        let bricks = [];
+        
+        // ========== УПРАВЛЕНИЕ (клавиши + тач) ==========
+        const input = {
+            left: false, right: false, up: false, down: false, fire: false
+        };
+        
+        // флаг для кнопок, чтобы избежать спама на мобилах
+        let mobileFirePressed = false;
+        
+        // ========== ОБНОВЛЕНИЕ UI ==========
+        function updateUI() {
+            document.getElementById('healthValue').innerText = health;
+            document.getElementById('scoreValue').innerText = score;
+        }
+        
+        // ========== СТОЛКНОВЕНИЕ ПРЯМОУГОЛЬНИКОВ ==========
+        function collide(r1, r2) {
+            return !(r2.x > r1.x + r1.w ||
+                r2.x + r2.w < r1.x ||
+                r2.y > r1.y + r1.h ||
+                r2.y + r2.h < r1.y);
+        }
+        
+        // ========== ПОСТРОЕНИЕ КИРПИЧЕЙ (как в оригинале) ==========
+        function buildBricks() {
+            let arr = [];
+            for (let i = 0; i < 20; i++) {
+                arr.push({ x: i * 42, y: 0, w: 38, h: 38 });
+                arr.push({ x: i * 42, y: 562, w: 38, h: 38 });
+            }
+            for (let i = 0; i < 15; i++) {
+                arr.push({ x: 0, y: i * 42, w: 38, h: 38 });
+                arr.push({ x: 762, y: i * 42, w: 38, h: 38 });
+            }
+            for (let i = 3; i < 18; i += 4) {
+                for (let j = 4; j < 10; j += 2) {
+                    arr.push({ x: i * 42, y: j * 42, w: 38, h: 38 });
+                }
+            }
+            return arr;
+        }
+        
+        // ========== СОЗДАНИЕ ВРАГОВ ==========
+        function createEnemies() {
+            let arr = [];
+            for (let i = 0; i < 3; i++) {
+                arr.push({
+                    x: 100 + i * 250, y: 80,
+                    w: 40, h: 40,
+                    dir: 1,
+                    moveTimer: 0,
+                    shootTimer: Math.floor(Math.random() * 50)
+                });
+            }
+            return arr;
+        }
+        
+        // ========== ПЕРЕЗАПУСК ==========
+        function restartGame() {
+            gameOver = false;
+            health = 3;
+            score = 0;
+            updateUI();
+            tank = { x: 380, y: 520, w: 40, h: 40, dir: 0 };
+            bullet = { active: false, x: 0, y: 0, speedX: 0, speedY: 0 };
+            shootDelay = 0;
+            enemyBullets = [];
+            bricks = buildBricks();
+            enemies = createEnemies();
+        }
+        
+        // ========== ДВИЖЕНИЕ ТАНКА С КОЛЛИЗИЕЙ ==========
+        function moveTank(dx, dy, newDir) {
+            let newX = tank.x + dx;
+            let newY = tank.y + dy;
+            if (newX < 2) newX = 2;
+            if (newX > 758) newX = 758;
+            if (newY < 2) newY = 2;
+            if (newY > 558) newY = 558;
+            let oldX = tank.x, oldY = tank.y;
+            tank.x = newX;
+            tank.y = newY;
+            tank.dir = newDir;
+            for (let b of bricks) {
+                if (collide({x: tank.x, y: tank.y, w: tank.w, h: tank.h}, b)) {
+                    tank.x = oldX;
+                    tank.y = oldY;
+                    break;
+                }
+            }
+        }
+        
+        // ========== ВЫСТРЕЛ ИГРОКА ==========
+        function shootPlayer() {
+            if (bullet.active) return;
+            if (shootDelay > 0) return;
+            shootDelay = 15;
+            bullet.active = true;
+            if (tank.dir === 0) {
+                bullet.x = tank.x + 16;
+                bullet.y = tank.y;
+                bullet.speedX = 0; bullet.speedY = -8;
+            } else if (tank.dir === 1) {
+                bullet.x = tank.x + 16;
+                bullet.y = tank.y + 40;
+                bullet.speedX = 0; bullet.speedY = 8;
+            } else if (tank.dir === 2) {
+                bullet.x = tank.x;
+                bullet.y = tank.y + 16;
+                bullet.speedX = -8; bullet.speedY = 0;
+            } else {
+                bullet.x = tank.x + 40;
+                bullet.y = tank.y + 16;
+                bullet.speedX = 8; bullet.speedY = 0;
+            }
+        }
+        
+        // ========== ОБНОВЛЕНИЕ ПУЛИ ИГРОКА ==========
+        function updatePlayerBullet() {
+            if (!bullet.active) return;
+            bullet.x += bullet.speedX;
+            bullet.y += bullet.speedY;
+            if (bullet.x < -50 || bullet.x > 850 || bullet.y < -50 || bullet.y > 650) {
+                bullet.active = false;
+                return;
+            }
+            let bulletRect = { x: bullet.x, y: bullet.y, w: 8, h: 8 };
+            for (let i = 0; i < bricks.length; i++) {
+                if (collide(bulletRect, bricks[i])) {
+                    bricks.splice(i,1);
+                    bullet.active = false;
+                    score += 10;
+                    updateUI();
+                    return;
+                }
+            }
+            if (bullet.active) {
+                for (let i = 0; i < enemies.length; i++) {
+                    let e = enemies[i];
+                    if (collide(bulletRect, {x: e.x, y: e.y, w: e.w, h: e.h})) {
+                        enemies.splice(i,1);
+                        bullet.active = false;
+                        score += 100;
+                        updateUI();
+                        return;
+                    }
+                }
+            }
+        }
+        
+        // ========== ОБНОВЛЕНИЕ ВРАГОВ ==========
+        function updateEnemies() {
+            for (let i = 0; i < enemies.length; i++) {
+                let e = enemies[i];
+                e.moveTimer++;
+                e.shootTimer++;
+                if (e.moveTimer > 50) {
+                    e.moveTimer = 0;
+                    e.dir = Math.floor(Math.random() * 4);
+                }
+                let oldX = e.x, oldY = e.y;
+                if (e.dir === 0) e.y -= 2;
+                if (e.dir === 1) e.y += 2;
+                if (e.dir === 2) e.x -= 2;
+                if (e.dir === 3) e.x += 2;
+                if (e.x < 2) e.x = 2;
+                if (e.x > 758) e.x = 758;
+                if (e.y < 2) e.y = 2;
+                if (e.y > 400) e.y = 400;
+                for (let b of bricks) {
+                    if (collide({x: e.x, y: e.y, w: e.w, h: e.h}, b)) {
+                        e.x = oldX;
+                        e.y = oldY;
+                        break;
+                    }
+                }
+                if (e.shootTimer > 40) {
+                    e.shootTimer = 0;
+                    let eb = { x:0, y:0, w:8, h:8, speedX:0, speedY:0 };
+                    if (e.dir === 0) { eb.x = e.x+16; eb.y = e.y; eb.speedX=0; eb.speedY=-6; }
+                    else if (e.dir === 1) { eb.x = e.x+16; eb.y = e.y+40; eb.speedX=0; eb.speedY=6; }
+                    else if (e.dir === 2) { eb.x = e.x; eb.y = e.y+16; eb.speedX=-6; eb.speedY=0; }
+                    else { eb.x = e.x+40; eb.y = e.y+16; eb.speedX=6; eb.speedY=0; }
+                    enemyBullets.push(eb);
+                }
+            }
+        }
+        
+        // ========== ОБНОВЛЕНИЕ ПУЛЬ ВРАГОВ ==========
+        function updateEnemyBullets() {
+            for (let i = 0; i < enemyBullets.length; i++) {
+                let eb = enemyBullets[i];
+                eb.x += eb.speedX;
+                eb.y += eb.speedY;
+                if (eb.x < -50 || eb.x > 850 || eb.y < -50 || eb.y > 650) {
+                    enemyBullets.splice(i,1);
+                    i--;
+                    continue;
+                }
+                let bulletRect = { x: eb.x, y: eb.y, w: eb.w, h: eb.h };
+                let tankRect = { x: tank.x, y: tank.y, w: tank.w, h: tank.h };
+                if (collide(bulletRect, tankRect)) {
+                    health--;
+                    updateUI();
+                    enemyBullets.splice(i,1);
+                    i--;
+                    if (health <= 0) gameOver = true;
+                    continue;
+                }
+                for (let j = 0; j < bricks.length; j++) {
+                    if (collide(bulletRect, bricks[j])) {
+                        bricks.splice(j,1);
+                        enemyBullets.splice(i,1);
+                        i--;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // ========== РЕСПАВН ВРАГОВ ==========
+        function respawnEnemiesIfNeeded() {
+            if (enemies.length === 0 && !gameOver && health > 0) {
+                for (let i = 0; i < 3; i++) {
+                    enemies.push({
+                        x: 100 + i * 250, y: 80,
+                        w: 40, h: 40,
+                        dir: 1,
+                        moveTimer: 0,
+                        shootTimer: Math.floor(Math.random() * 50)
+                    });
+                }
+            }
+        }
+        
+        // ========== ОБНОВЛЕНИЕ ЛОГИКИ ==========
+        function updateGame() {
+            if (gameOver) return;
+            if (health <= 0) { gameOver = true; return; }
+            
+            // управление с мобильных кнопок / клавиатуры
+            if (input.left) moveTank(-4, 0, 2);
+            if (input.right) moveTank(4, 0, 3);
+            if (input.up) moveTank(0, -4, 0);
+            if (input.down) moveTank(0, 4, 1);
+            
+            if (shootDelay > 0) shootDelay--;
+            if (input.fire) {
+                shootPlayer();
+                // небольшой блок повторного срабатывания для мобильных (не спамит)
+                if (mobileFirePressed) {
+                    // не даём заспамить сотнями выстрелов за один тач
+                }
+            }
+            
+            updatePlayerBullet();
+            updateEnemies();
+            updateEnemyBullets();
+            respawnEnemiesIfNeeded();
+        }
+        
+        // ========== ОТРИСОВКА (оригинальный стиль) ==========
+        function draw() {
+            ctx.clearRect(0, 0, 800, 600);
+            ctx.fillStyle = '#2a2a24';
+            ctx.fillRect(0, 0, 800, 600);
+            ctx.fillStyle = '#3d3a30';
+            for (let i = 0; i < 400; i++) {
+                ctx.fillRect((i * 131) % 800, (i * 83) % 600, 2, 2);
+            }
+            // кирпичи
+            for (let b of bricks) {
+                ctx.fillStyle = '#b87c3a';
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+                ctx.fillStyle = '#8b5a2b';
+                ctx.fillRect(b.x+4, b.y+4, b.w-8, b.h-8);
+                ctx.fillStyle = '#e6a155';
+                ctx.fillRect(b.x+2, b.y+2, b.w-4, 5);
+            }
+            // танк игрока
+            ctx.fillStyle = '#4f9e32';
+            ctx.fillRect(tank.x, tank.y, tank.w, tank.h);
+            ctx.fillStyle = '#32781e';
+            ctx.fillRect(tank.x+6, tank.y+6, tank.w-12, tank.h-12);
+            ctx.fillStyle = '#f5d742';
+            let cx = tank.x + tank.w/2;
+            let cy = tank.y + tank.h/2;
+            if (tank.dir === 0) ctx.fillRect(cx-4, tank.y-8, 8, 12);
+            else if (tank.dir === 1) ctx.fillRect(cx-4, tank.y+tank.h-4, 8, 12);
+            else if (tank.dir === 2) ctx.fillRect(tank.x-8, cy-4, 12, 8);
+            else ctx.fillRect(tank.x+tank.w-4, cy-4, 12, 8);
+            // враги
+            for (let e of enemies) {
+                ctx.fillStyle = '#bd6a32';
+                ctx.fillRect(e.x, e.y, e.w, e.h);
+                ctx.fillStyle = '#87461d';
+                ctx.fillRect(e.x+5, e.y+5, e.w-10, e.h-10);
+                ctx.fillStyle = '#d17e42';
+                let ex = e.x + e.w/2;
+                let ey = e.y + e.h/2;
+                if (e.dir === 0) ctx.fillRect(ex-3, e.y-6, 6, 10);
+                else if (e.dir === 1) ctx.fillRect(ex-3, e.y+e.h-4, 6, 10);
+                else if (e.dir === 2) ctx.fillRect(e.x-6, ey-3, 10, 6);
+                else ctx.fillRect(e.x+e.w-4, ey-3, 10, 6);
+            }
+            // пуля игрока
+            if (bullet.active) {
+                ctx.fillStyle = '#ffcc44';
+                ctx.fillRect(bullet.x, bullet.y, 8, 8);
+                ctx.fillStyle = '#ffaa22';
+                ctx.fillRect(bullet.x+2, bullet.y+2, 4, 4);
+            }
+            // пули врагов
+            for (let eb of enemyBullets) {
+                ctx.fillStyle = '#ff6644';
+                ctx.fillRect(eb.x, eb.y, eb.w, eb.h);
+                ctx.fillStyle = '#ffaa77';
+                ctx.fillRect(eb.x+2, eb.y+2, 4, 4);
+            }
+            if (gameOver || health <= 0) {
+                ctx.font = 'bold 46px "Courier New", monospace';
+                ctx.fillStyle = '#f0d890';
+                ctx.fillText('GAME OVER', 230, 290);
+                ctx.font = '18px monospace';
+                ctx.fillStyle = '#c9aa6a';
+                ctx.fillText('нажми 🔄 для рестарта', 295, 360);
+            }
+            ctx.font = 'bold 18px monospace';
+            ctx.fillStyle = '#ecd67a';
+            ctx.fillText('❤️ '+health, 18, 48);
+            ctx.fillText('⭐ '+score, 108, 48);
+        }
+        
+        // ========== МОБИЛЬНЫЕ СОБЫТИЯ (сенсорные кнопки) ==========
+        function attachButton(btnId, action, isFire = false) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            const startHandler = (e) => {
+                e.preventDefault();
+                if (isFire) {
+                    input.fire = true;
+                    mobileFirePressed = true;
+                    setTimeout(() => { mobileFirePressed = false; }, 150);
+                } else {
+                    input[action] = true;
+                }
+            };
+            const endHandler = (e) => {
+                e.preventDefault();
+                if (isFire) {
+                    input.fire = false;
+                } else {
+                    input[action] = false;
+                }
+            };
+            btn.addEventListener('mousedown', startHandler);
+            btn.addEventListener('mouseup', endHandler);
+            btn.addEventListener('mouseleave', endHandler);
+            btn.addEventListener('touchstart', startHandler, {passive: false});
+            btn.addEventListener('touchend', endHandler);
+            btn.addEventListener('touchcancel', endHandler);
+        }
+        
+        function initMobileControls() {
+            attachButton('btnLeft', 'left');
+            attachButton('btnRight', 'right');
+            attachButton('btnUp', 'up');
+            attachButton('btnDown', 'down');
+            attachButton('btnFire', 'fire', true);
+            const restartBtn = document.getElementById('btnRestart');
+            if (restartBtn) {
+                restartBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    restartGame();
+                });
+                restartBtn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    restartGame();
+                });
+            }
+        }
+        
+        // ========== КЛАВИАТУРА (для отладки на ПК + поддержка) ==========
+        function onKeyDown(e) {
+            let key = e.key;
+            if (key === 'ArrowLeft') input.left = true;
+            if (key === 'ArrowRight') input.right = true;
+            if (key === 'ArrowUp') input.up = true;
+            if (key === 'ArrowDown') input.down = true;
+            if (key === ' ' || key === 'Space') {
+                input.fire = true;
+                e.preventDefault();
+            }
+            if (key === 'r' || key === 'R') {
+                restartGame();
+                e.preventDefault();
+            }
+        }
+        function onKeyUp(e) {
+            let key = e.key;
+            if (key === 'ArrowLeft') input.left = false;
+            if (key === 'ArrowRight') input.right = false;
+            if (key === 'ArrowUp') input.up = false;
+            if (key === 'ArrowDown') input.down = false;
+            if (key === ' ' || key === 'Space') {
+                input.fire = false;
+                e.preventDefault();
+            }
+        }
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        
+        // предотвращаем скролл при тач-свайпе на canvas
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); });
+        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); });
+        
+        // ========== ЗАПУСК ==========
+        restartGame();
+        initMobileControls();
+        
+        function gameLoop() {
+            updateGame();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        gameLoop();
+    })();
+</script>
+</body>
+</html>
