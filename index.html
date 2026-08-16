@@ -42,6 +42,7 @@
             font-family: monospace;
             width: 100%;
             margin: 6px 0;
+            touch-action: manipulation;
         }
         .mode-btn:active { transform: scale(0.97); }
         .mode-btn.bots { background: #3a6e3a; }
@@ -69,6 +70,7 @@
             font-weight: bold;
             font-size: 0.9rem;
             margin-bottom: 4px;
+            flex-shrink: 0;
         }
         canvas {
             box-shadow: 0 0 0 3px #ab8743, 0 10px 25px black;
@@ -172,6 +174,44 @@
             width: 80px;
         }
         .back-btn:active { transform: scale(0.95); }
+        .network-panel {
+            background: #0e180c;
+            border-radius: 20px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .network-panel input {
+            background: #2c2a1c;
+            border: 2px solid #b99a4a;
+            padding: 10px;
+            border-radius: 30px;
+            font-family: monospace;
+            color: #ffeaaf;
+            font-size: 0.9rem;
+            width: 100%;
+            margin: 5px 0;
+            text-align: center;
+        }
+        .network-panel button {
+            background: #3a5a8a;
+            border: none;
+            padding: 10px;
+            border-radius: 30px;
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            color: white;
+            font-family: monospace;
+            width: 100%;
+            margin: 5px 0;
+        }
+        .network-panel button:active { transform: scale(0.97); }
+        .status-text {
+            color: #cfc68f;
+            font-size: 0.7rem;
+            margin-top: 8px;
+            text-align: center;
+        }
         @media (min-width: 860px) {
             .touch-controls { display: none; }
         }
@@ -199,6 +239,12 @@
     <button class="mode-btn ctf" data-mode="ctf">🏁 ЗАХВАТ ФЛАГА</button>
     <button class="mode-btn pvp" data-mode="pvp">⚔️ PVP 2 ИГРОКА</button>
     <button class="mode-btn online" data-mode="online">🌐 ПО СЕТИ</button>
+    <div id="networkPanel" class="network-panel hidden">
+        <input type="text" id="serverIp" placeholder="IP сервера (localhost)" value="localhost">
+        <input type="text" id="serverPort" placeholder="Порт" value="8080">
+        <button id="connectBtn">🔌 ПОДКЛЮЧИТЬСЯ</button>
+        <div class="status-text" id="netStatus">Введите IP сервера и нажмите подключиться</div>
+    </div>
 </div>
 
 <div id="game" class="game-container hidden">
@@ -222,17 +268,23 @@
             <button class="back-btn" id="backBtn">🏠 МЕНЮ</button>
         </div>
     </div>
+    <div id="onlineStatus" class="status-text" style="margin-top:4px;color:#88aa44;"></div>
 </div>
 
 <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     
+    // ========== ПЕРЕМЕННЫЕ ==========
     let currentMode = null;
     let gameRunning = false;
     let gameOver = false;
     let score = 0;
     let bricks = [];
+    let ws = null;
+    let myId = null;
+    let players = new Map();
+    let lastSend = 0;
     
     let p1 = { x: 380, y: 520, w: 40, h: 40, dir: 0, health: 3 };
     let p1Bullet = { active: false, x: 0, y: 0, speedX: 0, speedY: 0 };
@@ -248,6 +300,7 @@
     const keys = { left: false, right: false, up: false, down: false, fire: false };
     const keysP2 = { left: false, right: false, up: false, down: false, fire: false };
     
+    // ========== ПОСТРОЕНИЕ СТЕН ==========
     function buildBricks() {
         let arr = [];
         for (let i = 0; i < 20; i++) {
@@ -275,6 +328,7 @@
         document.getElementById('scoreValue').innerText = score;
     }
     
+    // ========== РЕСТАРТ ==========
     function restart() {
         gameOver = false;
         score = 0;
@@ -283,6 +337,7 @@
         p1Delay = 0;
         bricks = buildBricks();
         flag = { x: 700, y: 80, w: 28, h: 28, captured: false, carrier: null };
+        players.clear();
         
         if (currentMode === 'pvp') {
             p2 = { x: 380, y: 80, w: 40, h: 40, dir: 1, health: 3 };
@@ -299,6 +354,7 @@
         updateUI();
     }
     
+    // ========== ДВИЖЕНИЕ ТАНКА ==========
     function moveTank(tank, dx, dy, newDir, isP1) {
         let newX = tank.x + dx;
         let newY = tank.y + dy;
@@ -325,6 +381,7 @@
         }
     }
     
+    // ========== СТРЕЛЬБА ==========
     function shoot(tank, bullet, isP1) {
         if (bullet.active) return;
         if (isP1 && p1Delay > 0) return;
@@ -347,8 +404,13 @@
             bullet.x = tank.x + 40; bullet.y = tank.y + 16;
             bullet.speedX = 8; bullet.speedY = 0;
         }
+        
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'shoot', bullet: bullet, dir: tank.dir }));
+        }
     }
     
+    // ========== ОБНОВЛЕНИЕ ПУЛИ ==========
     function updateBullet(bullet, isP1Bullet) {
         if (!bullet.active) return;
         bullet.x += bullet.speedX;
@@ -376,6 +438,23 @@
             return;
         }
         
+        for (let [id, player] of players) {
+            if (collide(bulletRect, {x: player.x, y: player.y, w: 40, h: 40})) {
+                player.health--;
+                bullet.active = false;
+                if (isP1Bullet) { score += 50; updateUI(); }
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'damage', targetId: id, health: player.health }));
+                }
+                if (player.health <= 0) {
+                    players.delete(id);
+                    score += 200;
+                    updateUI();
+                }
+                return;
+            }
+        }
+        
         for (let i = 0; i < enemies.length; i++) {
             if (collide(bulletRect, {x: enemies[i].x, y: enemies[i].y, w: 40, h: 40})) {
                 enemies.splice(i, 1);
@@ -386,6 +465,7 @@
         }
     }
     
+    // ========== БОТЫ ==========
     function updateEnemies() {
         for (let i = 0; i < enemies.length; i++) {
             let e = enemies[i];
@@ -430,6 +510,7 @@
         }
     }
     
+    // ========== CTF ==========
     function updateCTF() {
         if (currentMode !== 'ctf') return;
         let flagRect = { x: flag.x, y: flag.y, w: flag.w, h: flag.h };
@@ -456,6 +537,16 @@
         }
     }
     
+    function sendPosition() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'pos',
+                x: p1.x, y: p1.y, dir: p1.dir, health: p1.health
+            }));
+        }
+    }
+    
+    // ========== ОБНОВЛЕНИЕ ИГРЫ ==========
     function updateGame() {
         if (gameOver || p1.health <= 0) {
             if (p1.health <= 0) gameOver = true;
@@ -486,8 +577,17 @@
         }
         
         if (currentMode === 'ctf') updateCTF();
+        
+        if (currentMode === 'online' && ws && ws.readyState === WebSocket.OPEN) {
+            let now = Date.now();
+            if (now - lastSend > 50) {
+                sendPosition();
+                lastSend = now;
+            }
+        }
     }
     
+    // ========== ОТРИСОВКА ==========
     function draw() {
         ctx.clearRect(0, 0, 800, 600);
         ctx.fillStyle = '#2d2a24';
@@ -512,6 +612,23 @@
             ctx.fillRect(50, 520, 30, 30);
             ctx.fillStyle = 'gold';
             ctx.fillText('🏠', 57, 542);
+        }
+        
+        let colorIndex = 0;
+        const colors = ['#c44f2a', '#2a6ec4', '#c4a42a', '#9e2ac4'];
+        for (let [id, player] of players) {
+            ctx.fillStyle = colors[colorIndex % colors.length];
+            ctx.fillRect(player.x, player.y, 40, 40);
+            ctx.fillStyle = '#ffaa66';
+            let ex = player.x + 20, ey = player.y + 20;
+            if (player.dir === 0) ctx.fillRect(ex-3, player.y-6, 6, 10);
+            else if (player.dir === 1) ctx.fillRect(ex-3, player.y+36, 6, 10);
+            else if (player.dir === 2) ctx.fillRect(player.x-6, ey-3, 10, 6);
+            else ctx.fillRect(player.x+36, ey-3, 10, 6);
+            ctx.fillStyle = 'white';
+            ctx.font = '12px monospace';
+            ctx.fillText('❤️'+player.health, player.x+5, player.y-5);
+            colorIndex++;
         }
         
         ctx.fillStyle = '#4f9e32';
@@ -567,6 +684,7 @@
         }
     }
     
+    // ========== РЕЖИМЫ ==========
     function startMode(mode) {
         currentMode = mode;
         gameRunning = true;
@@ -576,6 +694,7 @@
         if (mode === 'pvp') modeText = '⚔️ PVP 2 ИГРОКА';
         if (mode === 'online') modeText = '🌐 СЕТЕВОЙ РЕЖИМ';
         document.getElementById('modeLabel').innerText = modeText;
+        document.getElementById('onlineStatus').innerText = '';
         restart();
         document.getElementById('menu').classList.add('hidden');
         document.getElementById('game').classList.remove('hidden');
@@ -583,10 +702,100 @@
     
     function exitToMenu() {
         gameRunning = false;
+        if (ws) { ws.close(); ws = null; }
+        players.clear();
         document.getElementById('menu').classList.remove('hidden');
         document.getElementById('game').classList.add('hidden');
-
-    // ========== ТАЧ ==========
+        document.getElementById('networkPanel').classList.add('hidden');
+    }
+    
+    // ========== ПОДКЛЮЧЕНИЕ К СЕРВЕРУ ==========
+    function connectToServer() {
+        const ip = document.getElementById('serverIp').value;
+        const port = document.getElementById('serverPort').value;
+        const url = `ws://${ip}:${port}`;
+        
+        document.getElementById('netStatus').innerText = `🔄 Подключение к ${ip}:${port}...`;
+        
+        ws = new WebSocket(url);
+        
+        ws.onopen = function() {
+            document.getElementById('netStatus').innerText = '✅ Подключено! Ожидаем игроков...';
+            document.getElementById('networkPanel').classList.add('hidden');
+            startMode('online');
+        };
+        
+        ws.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'id') {
+                    myId = data.id;
+                    document.getElementById('onlineStatus').innerText = `🎮 Ваш ID: ${myId}`;
+                }
+                if (data.type === 'pos' && data.playerId !== myId) {
+                    players.set(data.playerId, {
+                        x: data.x, y: data.y, dir: data.dir, health: data.health
+                    });
+                }
+                if (data.type === 'damage' && data.targetId === myId) {
+                    p1.health = data.health;
+                    updateUI();
+                    if (p1.health <= 0) gameOver = true;
+                }
+                if (data.type === 'disconnect') {
+                    players.delete(data.playerId);
+                }
+                document.getElementById('onlineStatus').innerText = `👥 Игроков: ${players.size + 1}`;
+            } catch(e) {}
+        };
+        
+        ws.onerror = function() {
+            document.getElementById('netStatus').innerText = '❌ Ошибка! Сервер не запущен. Запусти server.js';
+        };
+        
+        ws.onclose = function() {
+            if (gameRunning) {
+                document.getElementById('onlineStatus').innerText = '⚠️ Соединение потеряно!';
+                setTimeout(function() { exitToMenu(); }, 2000);
+            }
+        };
+    }
+    
+    // ========== КЛАВИАТУРА ==========
+    document.addEventListener('keydown', function(e) {
+        if (!gameRunning) return;
+        if (e.key === 'ArrowLeft') keys.left = true;
+        if (e.key === 'ArrowRight') keys.right = true;
+        if (e.key === 'ArrowUp') keys.up = true;
+        if (e.key === 'ArrowDown') keys.down = true;
+        if (e.key === ' ') { keys.fire = true; e.preventDefault(); }
+        if (currentMode === 'pvp') {
+            if (e.key === 'a') keysP2.left = true;
+            if (e.key === 'd') keysP2.right = true;
+            if (e.key === 'w') keysP2.up = true;
+            if (e.key === 's') keysP2.down = true;
+            if (e.key === 'x') { keysP2.fire = true; e.preventDefault(); }
+        }
+        if (e.key === 'r' || e.key === 'R') restart();
+        if (e.key === 'Escape') exitToMenu();
+    });
+    
+    document.addEventListener('keyup', function(e) {
+        if (e.key === 'ArrowLeft') keys.left = false;
+        if (e.key === 'ArrowRight') keys.right = false;
+        if (e.key === 'ArrowUp') keys.up = false;
+        if (e.key === 'ArrowDown') keys.down = false;
+        if (e.key === ' ') { keys.fire = false; }
+        if (currentMode === 'pvp') {
+            if (e.key === 'a') keysP2.left = false;
+            if (e.key === 'd') keysP2.right = false;
+            if (e.key === 'w') keysP2.up = false;
+            if (e.key === 's') keysP2.down = false;
+            if (e.key === 'x') { keysP2.fire = false; }
+        }
+    });
+    
+    // ========== ТАЧ-УПРАВЛЕНИЕ (ИСПРАВЛЕННОЕ) ==========
     function setupTouch() {
         const btnUp = document.getElementById('btnUp');
         const btnDown = document.getElementById('btnDown');
@@ -596,46 +805,116 @@
         const btnRestart = document.getElementById('btnRestart');
         const backBtn = document.getElementById('backBtn');
         
-        const attach = (btn, onStart, onEnd) => {
+        // Функция для привязки кнопок
+        function attachButton(btn, onStart, onEnd) {
             if (!btn) return;
-            btn.addEventListener('touchstart', (e) => { e.preventDefault(); onStart(); }, { passive: false });
-            btn.addEventListener('mousedown', (e) => { e.preventDefault(); onStart(); });
-            btn.addEventListener('touchend', (e) => { e.preventDefault(); onEnd(); }, { passive: false });
-            btn.addEventListener('mouseup', (e) => { e.preventDefault(); onEnd(); });
-            btn.addEventListener('touchcancel', (e) => { e.preventDefault(); onEnd(); }, { passive: false });
-            btn.addEventListener('mouseleave', (e) => { e.preventDefault(); onEnd(); });
-        };
+            // Touch события
+            btn.addEventListener('touchstart', function(e) {
+                e.preventDefault();
+                onStart();
+            }, { passive: false });
+            btn.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                onEnd();
+            }, { passive: false });
+            btn.addEventListener('touchcancel', function(e) {
+                e.preventDefault();
+                onEnd();
+            }, { passive: false });
+            // Mouse события (для ПК)
+            btn.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                onStart();
+            });
+            btn.addEventListener('mouseup', function(e) {
+                e.preventDefault();
+                onEnd();
+            });
+            btn.addEventListener('mouseleave', function(e) {
+                e.preventDefault();
+                onEnd();
+            });
+        }
         
-        attach(btnUp, () => keys.up = true, () => keys.up = false);
-        attach(btnDown, () => keys.down = true, () => keys.down = false);
-        attach(btnLeft, () => keys.left = true, () => keys.left = false);
-        attach(btnRight, () => keys.right = true, () => keys.right = false);
+        attachButton(btnUp, 
+            function() { keys.up = true; },
+            function() { keys.up = false; }
+        );
+        attachButton(btnDown,
+            function() { keys.down = true; },
+            function() { keys.down = false; }
+        );
+        attachButton(btnLeft,
+            function() { keys.left = true; },
+            function() { keys.left = false; }
+        );
+        attachButton(btnRight,
+            function() { keys.right = true; },
+            function() { keys.right = false; }
+        );
         
-        btnFire.addEventListener('touchstart', (e) => { e.preventDefault(); keys.fire = true; }, { passive: false });
-        btnFire.addEventListener('touchend', (e) => { e.preventDefault(); keys.fire = false; }, { passive: false });
-        btnFire.addEventListener('mousedown', (e) => { e.preventDefault(); keys.fire = true; });
-        btnFire.addEventListener('mouseup', (e) => { e.preventDefault(); keys.fire = false; });
-        btnFire.addEventListener('touchcancel', (e) => { e.preventDefault(); keys.fire = false; }, { passive: false });
-        btnFire.addEventListener('mouseleave', (e) => { e.preventDefault(); keys.fire = false; });
+        // Огонь
+        btnFire.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            keys.fire = true;
+        }, { passive: false });
+        btnFire.addEventListener('touchend', function(e) {
+            e.preventDefault();
+            keys.fire = false;
+        }, { passive: false });
+        btnFire.addEventListener('touchcancel', function(e) {
+            e.preventDefault();
+            keys.fire = false;
+        }, { passive: false });
+        btnFire.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            keys.fire = true;
+        });
+        btnFire.addEventListener('mouseup', function(e) {
+            e.preventDefault();
+            keys.fire = false;
+        });
+        btnFire.addEventListener('mouseleave', function(e) {
+            e.preventDefault();
+            keys.fire = false;
+        });
         
-        btnRestart.addEventListener('click', restart);
-        btnRestart.addEventListener('touchstart', (e) => { e.preventDefault(); restart(); }, { passive: false });
-        backBtn.addEventListener('click', exitToMenu);
-        backBtn.addEventListener('touchstart', (e) => { e.preventDefault(); exitToMenu(); }, { passive: false });
+        // Рестарт
+        btnRestart.addEventListener('click', function(e) {
+            e.preventDefault();
+            restart();
+        });
+        btnRestart.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            restart();
+        }, { passive: false });
+        
+        // Назад в меню
+        backBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            exitToMenu();
+        });
+        backBtn.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            exitToMenu();
+        }, { passive: false });
     }
     
     // ========== МЕНЮ ==========
-    document.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            let mode = btn.dataset.mode;
+    document.querySelectorAll('.mode-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var mode = this.dataset.mode;
             if (mode === 'online') {
-                alert('🌐 Сетевой режим:\n\n1. Установи Node.js\n2. Запусти server.js\n3. Введи IP сервера');
+                document.getElementById('networkPanel').classList.toggle('hidden');
+                document.getElementById('connectBtn').onclick = connectToServer;
             } else {
+                document.getElementById('networkPanel').classList.add('hidden');
                 startMode(mode);
             }
         });
     });
     
+    // ========== ЗАПУСК ==========
     setupTouch();
     
     function gameLoop() {
